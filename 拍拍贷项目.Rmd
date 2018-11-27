@@ -1,0 +1,521 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+# 拍拍贷数据分析-李明
+
+**项目数据**：数据来自拍拍贷真实业务数据，从2015-01-01到2017-01-30的所有信用标的10%样本。数据集包含LC.csv（标的特征表数据）和LP.csv（标的还款计划和还款记录表）数据。<br>
+**项目目的**：分析拍拍贷数据的借款和还款等变量的分布及其与其它变量之间的关系。<br>
+_TIPS_:由于本人对于借贷了解不多，以下分析都是查阅资料后进行的，但很有可能会有概念上的错误。
+========================================================
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, packages}
+library(ggplot2)
+library(knitr)
+library(dplyr)
+library(GGally)
+library(gridExtra)
+library(lubridate)
+library(memisc)
+```
+
+```{r echo=FALSE, Load_the_Data}
+# 在读取之前把两个文件的编码方式改成了ANSI，否则会出现读取错误
+LC <- read.csv('d:/data/ppdai_3_23/LC.csv')
+LP <- read.csv('d:/data/ppdai_3_23/LP.csv')
+```
+
+## 数据结构
+- LC表格的结构：
+```{r echo=FALSE}
+# LC表格的结构
+str(LC)
+```
+
+- LP表格的结构
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# LP表格的结构
+str(LP)
+```
+
+  LC表格记录了借款人的一些特征以及总体的借款和还款情况，LP表格则记录了每个人每次借款的信息。由于LP表格中的内容是每个人某次借款的所有期的信息，但不包括其历史借款信息，所以在后续的分析中，会很少用到LP表格，而是主要使用LC表格。
+  <br>
+  在本次项目中，我主要分析的是借款人是否能够及时还款（是否逾期），以及它能够通过哪几个变量预测到。除此之外，也有必要观察其它一些变量（如：借款金额，性别等）的基本特征。
+  
+  <br>
+  其中LC表格的借款成功日期这一列应该是时间而不是factor，LP表格的还款状态应该是factor而不是int，还有一些其它数据类型的问题。使用代码修改数据类型。
+```{r message=FALSE, warning=FALSE,echo=FALSE}
+LC$借款成功日期 <- as.Date(LC$借款成功日期)
+LP$还款状态 <- as.factor(LP$还款状态)
+LC$ListingId <- as.factor((LC$ListingId))
+LP$ListingId <- as.factor(LP$ListingId)
+```
+
+
+
+## 单变量特征
+1. 年龄
+
+```{r, echo=FALSE}
+age_p <- ggplot(LC, aes(年龄)) +
+  geom_histogram(binwidth = 1)
+age_p
+```
+
+  在所有借款人中，23-30岁的人数最多，最低为17岁，最高为56岁。
+
+2. 性别
+
+```{r, echo=FALSE}
+ggplot(LC, aes(x=性别)) +
+  geom_bar()
+```
+
+  男性借款人数量是女性借款人数量的2倍左右。
+
+3. 借款金额
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# 对借款金额取对数
+ggplot(data = LC, aes(借款金额)) +
+  geom_histogram(binwidth = 0.02) +
+  scale_x_log10(breaks = c(0,600,1000,3000,10000, 20000, 100000))
+```
+  
+  Tips：横坐标取对数。<br>
+  借款金额大多数都低于5万，借款金额的均值为4424，中位数为3397，最小值100，最大值50万
+
+4. 本次借款逾期还款的比例
+分析所有借款人中，逾期还款期数占其总借款期数的比例。需要在LC表格中新加入一列，然后绘图。
+
+  4.1 本次借款的逾期还款这一列的计算：
+    - 首先需要计算一下本次借款的逾期数（使用LP表格）
+    - 然后把本次的逾期数加入到LC表格中
+    - 逾期还款的比例计算公式为(不考虑历史借款)：
+    $$逾期比例=\frac {本次借款逾期期数}{本次借款期数}$$
+    
+```{r, echo=FALSE}
+# 首先计算一下本次借款的逾期数（使用LP表格）
+# 取出逾期还款的所有期
+subLP <- subset(LP, 还款状态 != 1 & 还款状态 != 3)
+# 统计每个人的逾期期数
+nLP <- subLP %>% 
+  group_by(ListingId) %>% 
+  summarise(本次逾期期数 = n())
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+LC_new <- right_join(LC, nLP, by = 'ListingId')
+# 把这一列的NA替换成0
+LC_new$本次逾期期数 <- as.numeric(LC_new$本次逾期期数)
+LC_new[is.na(LC_new[ ,'本次逾期期数']), '本次逾期期数'] <- 0
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# 计算逾期比例
+LC_new <- transform(LC_new, 逾期比例 =  本次逾期期数/借款期限)
+```
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(LC_new, aes(逾期比例)) +
+  geom_histogram()
+```
+
+    在LP表格的数据中，没有逾期比例为0的客户。客户的逾期比例呈现跳跃式分布。
+
+
+5. 其它个人比较感兴趣的变量的分布(使用LC_new表格)：
+
+  - 借款利率：集中在20%左右，少数较低的异常值可能与平台的活动有关。
+  
+```{r, echo=FALSE}
+ggplot(LC_new, aes(y= 借款利率)) +
+  geom_boxplot()
+```
+  
+  - 借款期限：主要是1年，半年。
+  
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(LC_new, aes(借款期限)) +
+  geom_histogram()
+```
+  
+  - 初始评级：大多数为C和D
+  
+```{r, echo=FALSE}
+ggplot(LC_new, aes(x=初始评级)) +
+  geom_bar()
+```
+  
+  - 借款类型：普通和APP闪电较多，电商极少，还有很多其它。
+  
+```{r, echo=FALSE}
+ggplot(LC_new, aes(借款类型)) +
+  geom_bar()
+```
+
+  - 借款时间： 2015年初的借款记录很少，从2016年开始呈现大幅度增加。
+  
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(LC_new, aes(借款成功日期)) +
+  geom_histogram()
+```
+  
+  - 是否首标：非首标的数量是首标数量的三倍左右
+  
+```{r, echo=FALSE}
+ggplot(LC_new, aes(是否首标)) +
+  geom_bar()
+```
+  
+  - 认证情况：6种认证方式中，没有进行认证的用户明显多于认证的用户。相对地，手机认证和学历认证比其它认证方式的比例高一些。
+  
+```{r,echo=FALSE}
+rz1 <- ggplot(LC_new, aes(手机认证)) +
+  geom_bar()
+rz2 <- ggplot(LC_new, aes(户口认证)) +
+  geom_bar()
+rz3 <- ggplot(LC_new, aes(视频认证)) +
+  geom_bar()
+rz4 <- ggplot(LC_new, aes(学历认证)) +
+  geom_bar()
+rz5 <- ggplot(LC_new, aes(征信认证)) +
+  geom_bar()
+rz6 <- ggplot(LC_new, aes(淘宝认证)) +
+  geom_bar()
+
+grid.arrange(rz1, rz2, rz3, rz4, rz5, rz6)
+```
+  
+
+## 双变量分析 
+
+  对于拍拍贷来说，最基本的应该是避免坏账，也就是不能有太多人逾期不还。所以本部分主要分析逾期比例与其它因素之间的关系。我还想知道借款金额与其它特征有无明显关系，或者分布情况。注：此部分只分析LC_new表格。
+
+1. 首先利用ggpairs对所有变量的相关性进行分析
+```{r message=FALSE, warning=FALSE, fig.width=25, fig.height=25,echo=FALSE}
+set.seed(12345)
+drop_var <- names(LC_new) %in% c('ListingId')
+ggpairs(LC_new[sample(row.names(LC_new), 10000), !drop_var])
+```
+
+  观察图表，可以得到一些有意义的信息：
+    - 不同评级的逾期比例之间差异比较明显；
+    - 不同借款类型的逾期比例之间也存在差异；
+    - 首标的逾期比例相对较低；
+    - 从2015年到2017年，逾期比例是在逐渐增长的；
+  下面会分别进行分析。
+
+2. 逾期比例与性别
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(LC_new, aes(逾期比例)) +
+  geom_histogram() +
+  scale_y_log10()+
+  facet_wrap(~性别)
+```
+
+  除了男性人数比女性多之外，两者的逾期比例分布没有明显差异。
+
+3. 逾期比例与利率：
+
+```{r, echo=FALSE}
+ggplot(LC_new, aes(借款利率, 逾期比例)) +
+  geom_point(alpha = 1/10, color='#228B22',
+             position = 'jitter', size=1/4) +
+  geom_smooth(method='lm')
+```
+
+  从图中看到，两者有较弱的正相关关系。从实际情况分析，借款利率较高的客户应该对应的是信用评估等级较低的用户，所以其对应的逾期比例也会较高。<br>
+另外一个有意思的地方是，大多数的借款利率都是偶数。
+
+4. 逾期比例与时间：
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(LC_new, aes(借款成功日期, 逾期比例)) +
+  geom_point(alpha = 1/10, color='#87CEEB', size=1/4) +
+  geom_smooth()
+```
+
+  2015年的逾期比例还是比较低的，低于50%，但到了2017年逾期比例就飙升至90%了（注意，逾期比例的计算没有考虑逾期时间长短）。
+  
+5. 逾期比例与借款金额
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# 对借款金额取对数，取每个借款金额的逾期比例的均值
+ggplot(LC_new, aes(借款金额, 逾期比例)) +
+  geom_point(stat = 'summary', fun.y='mean') +
+  geom_smooth(method = 'lm') +
+  scale_x_log10()
+```
+
+由于借款金额主要分布在中间区域，所以我们可以剔除掉前后5%的借款金额看一下。
+
+```{r message=FALSE, warning=FALSE, paged.print=FALSE, r,echo=FALSE}
+ggplot(LC_new, aes(借款金额, 逾期比例)) +
+  geom_point(stat = 'summary', fun.y='mean') +
+  geom_smooth(method = 'lm') +
+  scale_x_continuous(limits = c(quantile(LC_new$借款金额, 0.05), 
+                                quantile(LC_new$借款金额, 0.95)))
+```
+  
+  小金额和大金额借贷的逾期比例较低，而中等借款金额的逾期比例较高。在主要借款金额区间（600-10000）内，逾期比例与借款金额呈现较弱的负相关关系。
+
+6. 逾期比例在不同借款类型，评估等级等变量中的不同：
+
+```{r, echo=FALSE, fig.height=10}
+p1 <- ggplot(LC_new, aes(初始评级, 逾期比例)) +
+  geom_boxplot()
+p2<- ggplot(LC_new, aes(借款类型, 逾期比例)) +
+  geom_boxplot()
+p3<- ggplot(LC_new, aes(是否首标, 逾期比例)) +
+  geom_boxplot()
+p4 <- ggplot(LC_new, aes(手机认证, 逾期比例)) +
+  geom_boxplot()
+p5 <- ggplot(LC_new, aes(户口认证, 逾期比例)) +
+  geom_boxplot()
+p6 <- ggplot(LC_new, aes(视频认证, 逾期比例)) +
+  geom_boxplot()
+p7 <- ggplot(LC_new, aes(学历认证, 逾期比例)) +
+  geom_boxplot()
+p8 <- ggplot(LC_new, aes(征信认证, 逾期比例)) +
+  geom_boxplot()
+p9 <- ggplot(LC_new, aes(淘宝认证, 逾期比例)) +
+  geom_boxplot()
+grid.arrange(p1, p2, p3, p4, p5, p6, p7,p8, p9)
+```
+
+  总结上表：
+  - 评级D，F的逾期比例明显高于评级A，B，C
+  - 电商的逾期比例明显低于APP闪电，普通和其他类型
+  - 手机，视频等所有的认证方式的一致特点是：认证的客户的逾期比例低于不认证的客户。
+
+7. 借款金额与年龄
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(LC_new, aes(年龄, 借款金额)) +
+  geom_jitter(alpha=1/10, size=1/4) +
+  geom_smooth() +
+  scale_y_log10()
+```
+
+  两者的关系不明显，低于20岁的客户借款金额偏低。
+
+8. 最后我想知道从2015年1月到2017年1月这两年的每月平均逾期比例的变化。
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+LC_new$借款月份 <- strftime(LC_new$借款成功日期, "%Y-%m")
+
+ggplot(LC_new, aes(借款月份, 逾期比例)) +
+  geom_line(stat = 'summary', fun.y='mean', group =1, color='red') +
+  geom_line(stat = 'summary', fun.y='median', group =1, color='blue', linetype=2) +
+  labs(title = '平均逾期比例/月', y = '平均逾期比例') +
+  annotate(geom='text', label = '平均逾期比例',x= '2015-03', y=0.5) +
+  annotate(geom='text', label = '逾期比例中位数',x= '2015-03', y=0.25) +
+  scale_x_discrete(breaks =c('2015-01', '2015-04', '2015-07',
+                           '2015-10', '2016-01', '2016-04',
+                           '2016-07', '2016-10', '2017-01'))
+
+```
+
+  可以明显的看到，从2016年4月开始，逾期比例就开始大幅度提高。
+
+
+## 多变量分析
+本部分主要分析逾期比例在不同变量中的特点
+
+1. 不同评级用户数量与时间的关系
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.height=6, fig.width=8}
+# 用堆积图展示不同评级的个数分布随时间的变化，并加上逾期比例作为参考，加上双y轴
+ggplot(LC_new, aes(借款月份)) +
+  geom_bar(aes(fill=初始评级)) +
+  geom_line(aes(借款月份, 逾期比例*40000),
+            stat = 'summary', fun.y='mean',group=1) +
+  geom_point(aes(借款月份, 逾期比例*40000),
+            stat = 'summary', fun.y='mean')+
+  scale_y_continuous(sec.axis = sec_axis(~./40000, name='逾期比例',))+
+  scale_fill_brewer(type = 'seq', palette = 'BuGn') +
+  theme(axis.text.x = element_text(angle = 70, hjust = 1))
+```
+
+  2016-2017年间，借款人数迅速增多。但借款人的初始评级分布与之前相比差异不大。
+
+2. 借款类型的变化
+
+```{r, echo=FALSE}
+ggplot(LC_new, aes(借款月份)) +
+  geom_bar(aes(fill=借款类型)) +
+  geom_line(aes(借款月份, 逾期比例*40000),
+            stat = 'summary', fun.y='mean',group=1) +
+  geom_point(aes(借款月份, 逾期比例*40000),
+            stat = 'summary', fun.y='mean')+
+  scale_y_continuous(sec.axis = sec_axis(~./40000, name='逾期比例',)) +
+  scale_fill_brewer(type='div', palette = 'Set2') +
+  theme(axis.text.x = element_text(angle = 70, hjust = 1))
+```
+
+  借款类型的分布也没有发生变化。
+
+3. 是否首标的变化
+
+```{r, echo=FALSE}
+ggplot(LC_new, aes(借款月份)) +
+  geom_bar(aes(fill=是否首标)) +
+  geom_line(aes(借款月份, 逾期比例*40000),
+            stat = 'summary', fun.y='mean',group=1) +
+  geom_point(aes(借款月份, 逾期比例*40000),
+            stat = 'summary', fun.y='mean')+
+  scale_y_continuous(sec.axis = sec_axis(~./40000, name='逾期比例',)) +
+  theme(axis.text.x = element_text(angle = 70, hjust = 1))
+```
+
+  2016年后，首标的比例越来越低，也就是说大多数的借款都来自于"老客户"。个人认为，“老客户”对于平台的机制和运作更了解，会增大它们逾期的可能性。
+
+3. 逾期比例与当日借款人数量
+
+从上面的双变量分析中，我就注意到“借款日期数量分布”和“逾期比例与日期的关系”图比较相似，说明两者可能存在相关性。
+
+```{r, echo=FALSE}
+LC_overdue <- LC_new %>% 
+  group_by(借款成功日期) %>% 
+  summarise(平均逾期比例 = mean(逾期比例),
+            借款数量 = n()) %>%
+  arrange(借款成功日期)
+
+ggplot(LC_overdue, aes(借款数量, 平均逾期比例)) +
+  geom_point() +
+  geom_smooth(method='lm')
+
+```
+
+两者的相关性大于0.7，说明随着时间推移，借款人数量增多，逾期比例也相应增加。
+
+4. 其它一些变量随时间的变化。
+
+```{r, echo=FALSE}
+ggplot(LC_new) +
+  geom_line(aes(借款月份, 借款金额),
+            stat = 'summary', fun.y='mean',group=1, color='red') +
+  geom_point(aes(借款月份, 借款金额),
+            stat = 'summary', fun.y='mean', color='red')+
+  geom_line(aes(借款月份, 逾期比例*20000),
+            stat = 'summary', fun.y='mean',group=1, color='blue') +
+  geom_point(aes(借款月份, 逾期比例*20000),
+            stat = 'summary', fun.y='mean', color='blue')+
+  scale_y_continuous(sec.axis = sec_axis(~./20000, name='逾期比例')) +
+  annotate(geom='text', label = '平均借款金额',x= '2016-03', y=5000) +
+  annotate(geom='text', label = '平均逾期比例',x= '2016-03', y=10000)+
+  coord_cartesian(ylim = c(0, 20000))+
+  scale_x_discrete(breaks =c('2015-01', '2015-04', '2015-07',
+                           '2015-10', '2016-01', '2016-04',
+                           '2016-07', '2016-10', '2017-01'))
+```
+
+2016年的借款金额平均值低于2015年，而且在持续下降。说明小额借贷增多。
+
+<br>
+还可以看一下借款金额变化的细节，我把借款金额分成多个节点：100,1000,5000,100000,500000
+
+```{r, echo=FALSE}
+LC_new$借款金额区间 <- cut(LC_new$借款金额,
+                     breaks=c(0,100,1000,5000,100000,500000))
+
+ggplot(LC_new, aes(借款月份)) +
+  geom_bar(aes(fill=借款金额区间)) +
+  geom_line(aes(借款月份, 逾期比例*40000),
+            stat = 'summary', fun.y='mean',group=1) +
+  geom_point(aes(借款月份, 逾期比例*40000),
+            stat = 'summary', fun.y='mean')+
+  scale_y_continuous(sec.axis = sec_axis(~./40000, name='逾期比例',)) +
+  theme(axis.text.x = element_text(angle = 70, hjust = 1)) +
+  scale_fill_brewer(type='seq')
+
+```
+
+
+可以看到小于1000的小金额贷款增多，1000-5000的小金额贷款比例也有所提高。
+
+<br>
+其它变量的情况是（图不再呈现）：
+  - 手机认证的比例在2016年后下降了不少
+  - 其它认证的比例基本没有变化，认证的人数非常少。
+  
+4. 建模
+主要分析逾期比例与各种变量之间的关系。如果有一个借款人是首标，通过建模可以借助其借款时间，金额，类型等对其逾期比例进行估测。
+<br>
+简单的线性模型结果如下。
+```{r, echo=FALSE}
+m1 <- lm(逾期比例 ~ 借款金额, LC_new)
+m2 <- update(m1, ~.+借款利率)
+m3 <- update(m2, ~.+借款期限)
+m4 <- update(m3, ~.+借款成功日期)
+m5 <- update(m4, ~.+初始评级)
+m6 <- update(m4, ~.+借款类型)
+m7 <- update(m4, ~.+是否首标)
+m8 <- update(m4, ~.+年龄)
+m9 <- update(m4, ~.+性别)
+m10 <- update(m4, ~.+手机认证)
+m11 <- update(m4, ~.+户口认证)
+m12 <- update(m4, ~.+视频认证)
+m13 <- update(m4, ~.+学历认证)
+m14 <- update(m4, ~.+征信认证)
+m15 <- update(m4, ~.+淘宝认证)
+mtable(m1,m2,m3, m4,m5,m6,m7,m8,m9,m10,m11,m12,m13,m14,m15)
+```
+
+建模结果评估：本次建模结果不理想（R方为0.433）。原因是没有找到与逾期比例相关度特别高的变量。分析实际情况，逾期比例受到很多其它因素的影响，如p2p发展现状，平台催债力度等。另外需要指出的是，逾期比例与利润的关系不大，虽然从数据的分析结果来看，逾期比例在2016年大增，但是拍拍贷仍然可以通过调整利息等手段盈利。
+
+## 最终成图和汇总：
+
+在上述分析中，我对数据中的变量及其关系进行了分析。我主要关注的变量是借款人的逾期比例，逾期比例高的用户越多，对于平台的发展越不利。逾期比例可能与借款时间，借款金额多多种因素有关。下面挑选出三张图用于说明上述的分析结果。
+
+### 图1
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(LC_new, aes(逾期比例)) +
+  geom_histogram(binwidth = 0.05) +
+  labs(title = '逾期比例分布', y='计数') +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+图1描述：令人惊讶的是，**所有的借款**都有一部分是逾期的；从图中获悉，逾期比例高于0.5的借款数量明显多于逾期比例低于0.5的借款数量，说明多数用户的逾期比例较高，这对于该平台来说是个不好的信号。
+
+### 图2
+
+```{r, echo=FALSE}
+ggplot(LC_overdue, aes(借款数量, 平均逾期比例)) +
+  geom_point()+
+  geom_smooth(method='lm') +
+  labs(title = '平均逾期比例与当日借款数量的关系',
+       x='当日借款数量') +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+图2描述：当日的借款数量与当日的平均逾期比例之间呈现较强正相关关系（相关系数大于0.7），即借款人越多越容易造成逾期。
+
+### 图3 
+
+
+```{r, echo=FALSE}
+ggplot(LC_new, aes(借款月份)) +
+  geom_bar(aes(fill=借款金额区间)) +
+  geom_line(aes(借款月份, 逾期比例*40000),
+            stat = 'summary', fun.y='mean',group=1) +
+  geom_point(aes(借款月份, 逾期比例*40000),
+            stat = 'summary', fun.y='mean')+
+  scale_y_continuous(sec.axis = sec_axis(~./40000, name='逾期比例',)) +
+  theme(axis.text.x = element_text(angle = 70, hjust = 1)) +
+  labs(title = '借款金额区间的变化') +
+  scale_fill_brewer(type='seq') +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+图3描述：2015年间，借款数量小幅增加。2016年开始，借款数量大幅增加，随之逾期比例也大幅增加。分析借款金额区可以看到，从2016年开始，小金额借款的比例明显增加，这可能与逾期比例的增加有一定关系。
+
+## 反思：
+首先我不太熟悉R的语法，比如一些基础的函数，运算符号等，这就造成了在分析过程中想要实现一个东西的时候要反复查找怎么做，很费精力。<br>
+其次，分析过程和步骤还有需要优化的地方，比如审阅老师指出的没有在双变量分析前分析单变量，轴标签不清楚等问题。我应该多找一些数据进行练习，熟悉DEA的流程，否则可能会影响分析的结果。<br>
+最后，由于对于统计学了解较少，所以对于建模的使用还很粗浅，只能“比葫芦画瓢”。未来在这方面需要投入精力进行学习。
